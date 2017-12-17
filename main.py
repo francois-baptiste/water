@@ -19,16 +19,28 @@ from keras.layers.core import Dense, Dropout, Activation
 from keras.optimizers import Adam, RMSprop
 
 FPS = 30
+VISION = 100 # cati mixeli in jur vede
 
 WIDTH = 480
 HEIGHT = 480
 
-CREEPS = 3
-EPHOCS = 30
+CREEPS = 3 # modelele fara senzori au nevoie de 3 CREEPS !!! 
+EPHOCS = 50
+
+TRAIN = True # if we train the network
+TRAIN = False # if we train the network
+DISPLAY = not TRAIN # no need for display if we train
 LOAD = None
 # model 80 e destul destul de bun
 # model 159 a fost antrenat o noapte
-# LOAD = 'models/model_159'
+# model 240 primul cu senzori care se descurca okay
+# modelul 301 e destul de bun: are viziunea de 100px  si a fost antrenat 30 de epoci cu 100 batch
+# modelul 33 are viziunea maxima antrenat 30 de epoci cu batch 100 dar e cam "fricos"
+# model 441 pare interesant
+# modelul 439 a castigat 26
+# 442
+# 525 - 3 ceeeps, 1k batch, 5k memory 30 epocs
+LOAD = 'models/model_525'
 
 class Agent():
     """Q learning agent."""
@@ -122,17 +134,17 @@ class Agent():
                  )
             )
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        self._model.add(Dropout(0.1))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        # self._model.add(Dropout(0.1))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        # self._model.add(Dropout(0.1))
 
         self._model.add(Dense(len(self._actions),
                               kernel_initializer='lecun_uniform'))
@@ -183,7 +195,7 @@ class Agent():
             return self._memory
         return random.sample(self._memory, batch_size)
 
-    def replay(self, batch_size=100):
+    def replay(self, batch_size=1000):
         """Replay the memory and train the model."""
 
         if batch_size > len(self._memory):
@@ -208,7 +220,6 @@ class Agent():
 
             # change only the spot for the reward that we choose
             # with the target reward
-            # import pdb; pdb.set_trace()
             target_f[0, self._actions.index(action)] = target
 
             # train the model so that starting from the base state
@@ -228,8 +239,10 @@ class Agent():
         self._model.fit(
             x_train,
             y_train,
-            epochs=2,
-            verbose=0)
+            epochs=1,
+            verbose=2,
+            batch_size=batch_size,
+            )
 
         # if the exploration factor is still not at minimum
         if self._epsilon > self._epsilon_min:
@@ -269,7 +282,7 @@ class Sensors(Agent):
             (-1, 0, 1), # axa y
         ]
         # move the lines to intersect with my current position 
-        sensors = [ (a, b, c+my_x) for a, b, c in sensors]
+        # sensors = [ (a, b, c+my_x) for a, b, c in sensors]
 
         def dist(x, y):
             """Distance from the agent."""
@@ -289,7 +302,10 @@ class Sensors(Agent):
                         y = HEIGHT - y # normalize the graph 
                         # if the distance between the line and the creep center is less then the
                         # creep radius
-                        if self.distance_line_creep(a, b, c, x, y) < self._game.AGENT_RADIUS and f(x):
+                        if (self.distance_line_creep(a, b, c, x-my_x, y-my_y) < self._game.AGENT_RADIUS
+                            and f(x)
+                            and abs(dist(x,y)) <= VISION):
+                            
                             intersects.append((x, y, dist(x, y), sign))
                 
                 # we have a list with the intersections
@@ -301,7 +317,6 @@ class Sensors(Agent):
                 else:
                     state.append(0)
         state = np.array([state]) 
-        # import pdb; pdb.set_trace()
         return state
 
     def prepare_model(self):
@@ -316,17 +331,17 @@ class Sensors(Agent):
                  )
             )
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        self._model.add(Dropout(0.1))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        self._model.add(Dropout(0.1))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
-        self._model.add(Dropout(0.2))
+        self._model.add(Dropout(0.1))
 
         self._model.add(Dense(len(self._actions),
                               kernel_initializer='lecun_uniform'))
@@ -348,12 +363,9 @@ if __name__ == "__main__":
         width=WIDTH, height=HEIGHT, num_creeps=CREEPS, 
     )
 
-    reward_values={'positive': 500.0, 'negative': -500.0, 'tick': -0.01, 'loss': -5000.0, 'win': 5000.0}
+    reward_values={'positive': 10.0, 'negative': -11.0, 'tick': -0.01, 'loss': -5.0, 'win': 1000000.0}
 
-    if not LOAD:
-        env = ple.PLE(game, fps=FPS*4000, display_screen=False, reward_values=reward_values)
-    else:
-        env = ple.PLE(game, fps=FPS, display_screen=True, reward_values=reward_values)
+    env = ple.PLE(game, fps=FPS, display_screen=DISPLAY, reward_values=reward_values)
     print("rewards :", game.rewards)
 
 
@@ -369,7 +381,7 @@ if __name__ == "__main__":
     scores = []
     reward = 0.0
 
-
+    won = 0
     # start our training loop
     start_e = time.time()
     for epoch in range(1, EPHOCS+1):
@@ -382,6 +394,7 @@ if __name__ == "__main__":
             # as the game can continue indefinitely we are only concerned with the
             # amount of frames
             if env.game_over():
+                won += 1
                 print("Finished a game !")
                 env.saveScreen("screen_capture_{}_{}.png".format(epoch, i))
                 env.reset_game()
@@ -398,14 +411,14 @@ if __name__ == "__main__":
 
             next_state = game.getGameState()
             agent.add_memory((current_state, action, reward, next_state, env.game_over()))
-            if not LOAD:
+            if TRAIN:
                 agent.replay()
         agent.save()
         print("Run {}, took: {:.4f}".format(epoch, time.time() - start_e))
         start_e = time.time()
 
 
-
+    print("Games won: ", won)
     plt_rewards_a, = plt.plot(rewards_a,  label='reward per action')
     plt_score, = plt.plot(scores, label='game score')
     plt.legend(handles=[plt_rewards_a, plt_score])
