@@ -8,21 +8,34 @@ import copy
 from pprint import pprint
 import matplotlib.pyplot as plt
 import os
+import time
+os.environ['MKL_NUM_THREADS'] = '8'
+os.environ['GOTO_NUM_THREADS'] = '8'
+os.environ['OMP_NUM_THREADS'] = '8'
+os.environ['openmp'] = 'True'
 
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation
 from keras.optimizers import Adam, RMSprop
 
-CREEPS = 3
-EPHOCS = 50
+FPS = 30
 
+WIDTH = 480
+HEIGHT = 480
+
+CREEPS = 3
+EPHOCS = 30
+LOAD = None
+# model 80 e destul destul de bun
+# model 159 a fost antrenat o noapte
+# LOAD = 'models/model_159'
 
 class Agent():
     """Q learning agent."""
 
-    def __init__(self, actions, max_memory=5000, gamma=.95, load=None):
+    def __init__(self, actions, max_memory=5000, gamma=.95, load=None, game=None):
         """Initialize the agent.
-        
+
         :param list actions: A list with all the available actions
         :param int max_memory: The upper limit for out memory
         :param int gamma: Discount factor for the future rewards
@@ -32,9 +45,10 @@ class Agent():
         :param int epsilon_decat: How will the epsilon decay over time
         :param int learning_rate: The learning rate of the model
         """
+        self._game = game
         self._actions = actions
         self._max_memory = max_memory
-        self._gamma=gamma
+        self._gamma = gamma
         self._epsilon = 1.0  # exploration rate
         self._epsilon_min = 0.01
         self._epsilon_decay = 0.995
@@ -108,14 +122,17 @@ class Agent():
                  )
             )
         self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
 
         self._model.add(Dense(150,
                               kernel_initializer='lecun_uniform'))
         self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
 
         self._model.add(Dense(len(self._actions),
                               kernel_initializer='lecun_uniform'))
@@ -125,8 +142,7 @@ class Agent():
 
         self._model.compile(loss='mse', optimizer=RMSprop())
 
-    @staticmethod
-    def preprocess_state(game_state):
+    def preprocess_state(self, game_state):
         """Process the state in a simpler format for the network.
 
         Basically have an array with triples like this:
@@ -167,9 +183,12 @@ class Agent():
             return self._memory
         return random.sample(self._memory, batch_size)
 
-    def replay(self, batch_size=1000):
+    def replay(self, batch_size=100):
         """Replay the memory and train the model."""
-        # print("Replay {} from {}".format(batch_size, len(self._memory)))
+
+        if batch_size > len(self._memory):
+            # to avoid overt fitting we don't reply
+            return
         minibatch = self.get_sample(batch_size)
 
         x_train = None
@@ -209,7 +228,7 @@ class Agent():
         self._model.fit(
             x_train,
             y_train,
-            epochs=1,
+            epochs=2,
             verbose=0)
 
         # if the exploration factor is still not at minimum
@@ -217,36 +236,147 @@ class Agent():
             # decay the exploration factor once
             self._epsilon *= self._epsilon_decay
 
+
+class Sensors(Agent):
+
+    @staticmethod
+    def distance_line_creep(a, b,c, x, y):
+        """Distance between a line and a creep."""
+        return abs(a*x + b*y + c) / ((a**2 + b**2) ** 0.5)
+
+    def preprocess_state(self, game_state):
+        """Process the state in a simpler format for the network.
+
+        Basically have an array with triples like this:
+          (x, y, type)
+        where type is -1 if that is a bad creep or +1 for a good creep
+
+        The last 2 elements are the position of out player.
+        """
+
+        my_x = game_state['player_x'] # -1 to normalize the graph
+        my_y = HEIGHT - game_state['player_y']
+
+        sensors = [
+            (1, -1, 0), # f(x) = x
+            (1, 1, 0), # f(x) = -x
+            (4, -1, 0), # f(x) = 4x
+            (4, 1, 0), # f(x) = -4x
+
+            (.25, -1, 0), # f(x) = 0.25*x
+            (.25, 1, 0), # f(x) = -0.25*x
+            (0, -1, 1), # axa x
+            (-1, 0, 1), # axa y
+        ]
+        # move the lines to intersect with my current position 
+        sensors = [ (a, b, c+my_x) for a, b, c in sensors]
+
+        def dist(x, y):
+            """Distance from the agent."""
+            return ((float(my_x) - float(x))**2 + (float(my_y) - float(y))**2) ** 0.5
+
+        pairs = [('BAD', -1), ('GOOD', +1)]
+        state = []
+        for f in [lambda x: my_x > x,
+                lambda x : my_x <= x]:
+            for a, b, c in sensors:
+                # the distance for the closest creep that intersects with that line
+                
+                # first get all creeps that intersect
+                intersects = []
+                for creep_type, sign in pairs:
+                    for x, y in game_state['creep_pos'][creep_type]:
+                        y = HEIGHT - y # normalize the graph 
+                        # if the distance between the line and the creep center is less then the
+                        # creep radius
+                        if self.distance_line_creep(a, b, c, x, y) < self._game.AGENT_RADIUS and f(x):
+                            intersects.append((x, y, dist(x, y), sign))
+                
+                # we have a list with the intersections
+                # now we need to see the distance
+                if intersects:
+                    intersects.sort(key=lambda x: x[3])
+                    x, y, d, s = intersects[0]
+                    state.append(s * d)
+                else:
+                    state.append(0)
+        state = np.array([state]) 
+        # import pdb; pdb.set_trace()
+        return state
+
+    def prepare_model(self):
+        """Prepare the NN model."""
+        self._model = Sequential()
+        self._model.add(
+            Dense(164,
+                  kernel_initializer='lecun_uniform',
+                  # 3 coordinates for every creep (x, y, type)
+                  # and two more for the player position
+                  input_shape=(16,)
+                 )
+            )
+        self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
+
+        self._model.add(Dense(150,
+                              kernel_initializer='lecun_uniform'))
+        self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
+
+        self._model.add(Dense(150,
+                              kernel_initializer='lecun_uniform'))
+        self._model.add(Activation('relu'))
+        self._model.add(Dropout(0.2))
+
+        self._model.add(Dense(len(self._actions),
+                              kernel_initializer='lecun_uniform'))
+
+        #linear output so we can have range of real-valued outputs
+        self._model.add(Activation('linear'))
+
+        self._model.compile(loss='mse', optimizer=RMSprop())
+
+
+def neighbors(arr,x,y,n=100):
+    ''' Given a 2D-array, returns an nxn array whose "center" element is arr[x,y]'''
+    arr=np.roll(np.roll(arr,shift=-x+1,axis=0),shift=-y+1,axis=1)
+    return arr[:n,:n]
+
 if __name__ == "__main__":
     print("Start ")
     game = ple.games.waterworld.WaterWorld(
-        width=480, height=480, num_creeps=CREEPS, 
+        width=WIDTH, height=HEIGHT, num_creeps=CREEPS, 
     )
-    reward_values={'positive': 500.0, 'negative': -500.0, 'tick': -0.01, 'loss': -5000.0, 'win': 100000.0}
-    # env = ple.PLE(game, fps=30*40, display_screen=False, reward_values=reward_values)
-    env = ple.PLE(game, fps=30, display_screen=True, reward_values=reward_values)
+
+    reward_values={'positive': 500.0, 'negative': -500.0, 'tick': -0.01, 'loss': -5000.0, 'win': 5000.0}
+
+    if not LOAD:
+        env = ple.PLE(game, fps=FPS*4000, display_screen=False, reward_values=reward_values)
+    else:
+        env = ple.PLE(game, fps=FPS, display_screen=True, reward_values=reward_values)
     print("rewards :", game.rewards)
 
-    agent = Agent(actions=env.getActionSet(),
-                  load='models/model_59')
 
-    # agent = Agent(actions=env.getActionSet())
+    # agent = Agent(actions=env.getActionSet(),
+    #               load=LOAD, game=game)
 
+    agent = Sensors(actions=env.getActionSet(),
+                    load=LOAD, game=game)
 
     env.init()
 
-    # nb_frames = 2000
-    nb_frames = EPHOCS * 1000
-    # max_noops = 20
-    rewards = []
     rewards_a = []
     scores = []
     reward = 0.0
-    old_reward = 0.0
-    
+
+
     # start our training loop
+    start_e = time.time()
     for epoch in range(1, EPHOCS+1):
         for i in range(1000):
+
+            if FPS == 1:
+                time.sleep(5)
             # if the game is over, reset the game
             # we don't care about the "won" games and we don't count them
             # as the game can continue indefinitely we are only concerned with the
@@ -261,25 +391,26 @@ if __name__ == "__main__":
             action = agent.pick_action(reward, current_state)
 
             reward = env.act(action)
-            old_reward += reward
 
             # keep the rewars
-            rewards.append(old_reward)
             rewards_a.append(reward)
             scores.append(game.getScore())
 
             next_state = game.getGameState()
             agent.add_memory((current_state, action, reward, next_state, env.game_over()))
-                
-            agent.replay()
+            if not LOAD:
+                agent.replay()
         agent.save()
-        print("Run ", epoch)
+        print("Run {}, took: {:.4f}".format(epoch, time.time() - start_e))
+        start_e = time.time()
 
 
 
-    # plt.plot(old_reward)
-    plt.plot(scores)
+    plt_rewards_a, = plt.plot(rewards_a,  label='reward per action')
+    plt_score, = plt.plot(scores, label='game score')
+    plt.legend(handles=[plt_rewards_a, plt_score])
     plt.ylabel("Rewards")
-    # plt.show()
+    plt.ylabel("frame count")
+    plt.show()
     print("Done ----")
     agent.save()
