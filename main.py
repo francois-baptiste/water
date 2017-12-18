@@ -28,7 +28,7 @@ CREEPS = 3 # modelele fara senzori au nevoie de 3 CREEPS !!!
 EPHOCS = 50
 
 TRAIN = True # if we train the network
-TRAIN = False # if we train the network
+TRAIN = False # if we rain the network
 DISPLAY = not TRAIN # no need for display if we train
 LOAD = None
 # model 80 e destul destul de bun
@@ -40,7 +40,15 @@ LOAD = None
 # modelul 439 a castigat 26
 # 442
 # 525 - 3 ceeeps, 1k batch, 5k memory 30 epocs
-LOAD = 'models/model_525'
+# 624 ^ fara dropout ( e timid, si nu pare sa se duca foarte mult dupa verzi, dar castiga)
+# 625 clasic dar antrenat cu Adam
+# 627 clasic, mai antrenat ca 525 ( pare sa castige, dar cam mananca rosii, penalizarea prea mica ?) 
+# 627 nu stiu ce e cu asta
+# 629 0.1 droput
+# 626 one layer
+# 623 mem_batch = batch_size
+
+LOAD = 'models/model_627'
 
 class Agent():
     """Q learning agent."""
@@ -240,7 +248,7 @@ class Agent():
             x_train,
             y_train,
             epochs=1,
-            verbose=2,
+            verbose=0,
             batch_size=batch_size,
             )
 
@@ -349,7 +357,7 @@ class Sensors(Agent):
         #linear output so we can have range of real-valued outputs
         self._model.add(Activation('linear'))
 
-        self._model.compile(loss='mse', optimizer=RMSprop())
+        self._model.compile(loss='mse', optimizer=Adam())
 
 
 def neighbors(arr,x,y,n=100):
