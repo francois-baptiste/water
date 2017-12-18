@@ -43,12 +43,14 @@ LOAD = None
 # 624 ^ fara dropout ( e timid, si nu pare sa se duca foarte mult dupa verzi, dar castiga)
 # 625 clasic dar antrenat cu Adam
 # 627 clasic, mai antrenat ca 525 ( pare sa castige, dar cam mananca rosii, penalizarea prea mica ?) 
-# 627 nu stiu ce e cu asta
-# 629 0.1 droput
-# 626 one layer
+# 627 fuge de rosii, si cam urmareste verzi ( mai are erori ) dar castiga jocuri
+# 629 0.1 droput (castiga si asta cateva)
+# 626 one layer si asta pare sa castige jocuri (poate tinem doar un layer)
 # 623 mem_batch = batch_size
+# nu are cum sa prezica cand castiga, poate ar trebui sa punem scorul de win
+# egal cu ala de a manca o bila verde
+LOAD = 'models/model_623'
 
-LOAD = 'models/model_627'
 
 class Agent():
     """Q learning agent."""
